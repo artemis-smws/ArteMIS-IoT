@@ -1,13 +1,15 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <IRremote.h>
+#include <IRremoteESP8266.h>
+#include <IRrecv.h>
+#include <IRutils.h>
 
-const int trigPin = 5; //14;
-const int echoPin = 18; //25;
-const int irSensorPin = 2; // IR sensor pin
+const int trigPin = 5; // Trigger pin
+const int echoPin = 18; // Echo pin
+const int irPin = 14; // IR sensor pin
 const int minDistance = 0; // Minimum distance in inches
-const int maxDistance = 50; // Maximum distance in inches
-const float thresholdPercentage = 10.0; // Threshold percentage for capacity increase
+const int maxDistance = 30; // Maximum distance in inches
+const float thresholdPercentage = 5.0; // Threshold percentage for capacity increase
 
 // Define sound speed in cm/uS
 #define SOUND_SPEED 0.034
@@ -25,6 +27,7 @@ unsigned long lowCapacityStartTime = 0; // Variable to store the time low capaci
 unsigned long previousMillis = 0; // Variable to store the last time WiFi was enabled
 unsigned long frequencyCount = 0; // Variable to store the frequency count
 unsigned long lastDay = 0; // Variable to store the last day
+unsigned long lastObjectDetectionTime = 0; // Variable to store the time that object detected
 const unsigned long interval = 5000; // Interval in milliseconds (5 seconds)
 const unsigned long thresholdDuration = 3000; // Threshold duration in milliseconds (3 seconds)
 const unsigned long lowCapacityDuration = 5000; // Low capacity duration in milliseconds (5 seconds)
@@ -33,14 +36,14 @@ const unsigned long lowCapacityDuration = 5000; // Low capacity duration in mill
 const char* ssid = "DAVID_BHOUSE_4G";
 const char* password = "PLDTWIFIdavid28";
 
-// Create an instance of the IRremote library
-IRrecv irrecv(irSensorPin);
+// Create an instance of the IR receiver
+IRrecv irrecv(irPin);
 
 void setup() {
   Serial.begin(9600); // Start serial communication
   pinMode(trigPin, OUTPUT); // Set the trigPin as an output
   pinMode(echoPin, INPUT); // Set the echoPin as an input
-  irrecv.enableIRIn(); // Enable IR receiver
+  irrecv.enableIRIn(); // Start the receiver
 }
 
 void loop() {
@@ -49,14 +52,24 @@ void loop() {
   float distanceInch = measureDistance();
   int capacity = mapDistanceToCapacity(distanceInch);
 
-  // IR signal detection and frequency counting
-  if (irrecv.decode()) {
-    frequencyCount++;
-    Serial.print("Object detected! Total count: ");
+  decode_results results;
+  
+  if (irrecv.decode(&results)) {
+    // Increment object count when within the last 3 second atleast an object is detected
+    if (currentMillis - lastObjectDetectionTime >= 3000) {
+      frequencyCount++;
+    }
+    
+    Serial.print("Object Count: ");
     Serial.println(frequencyCount);
-    irrecv.resume(); // Receive the next value
-  }
+    
+    // Update the last object detection time
+    lastObjectDetectionTime = currentMillis;
 
+    // Enable the receiver to receive the next value
+    irrecv.resume();
+  }
+  
   // Check if initial request has been sent
   if (!initialRequestSent) {
     if (!wifiEnabled) {
@@ -69,8 +82,8 @@ void loop() {
     lastCapacity = capacity; // Update last capacity
   }
   
-  if (capacity > lastCapacity * (1 + thresholdPercentage / 100.0) && capacity > lastCapacity + 10) {
-    // If capacity increased by threshold percentage and more than 10
+  if (capacity > lastCapacity * (1 + thresholdPercentage / 100.0) && capacity > lastCapacity + 5) {
+    // If capacity increased by threshold percentage and more than 5
     if (!wifiEnabled) {
       connectToWiFi(); // Connect to WiFi if not already connected
       previousMillis = currentMillis; // Update the time WiFi was enabled
@@ -93,10 +106,6 @@ void loop() {
     }
   } else {
     // If capacity did not increase by threshold percentage, print distance and capacity only
-    Serial.print("Distance (inch): ");
-    Serial.print(distanceInch);
-    Serial.print(", Capacity: ");
-    Serial.println(capacity);
     requestSent = false; // Reset requestSent flag
     thresholdMet = false; // Reset threshold met flag
   }
@@ -132,7 +141,7 @@ void loop() {
     lowCapacityMet = false;
   }
 
-  // Check if 5 seconds have passed and capacity hasn't increased by 10%
+  // Check if 5 seconds have passed and capacity hasn't increased by 5%
   if (wifiEnabled && (currentMillis - previousMillis >= interval) && (capacity <= lastCapacity * (1 + thresholdPercentage / 100.0))) {
     Serial.println("No significant capacity increase, disabling WiFi");
     WiFi.disconnect(); // Disconnect WiFi
@@ -144,7 +153,7 @@ void loop() {
   // Check if it's a new day and reset the request count
   unsigned long currentDay = currentMillis / (24 * 60 * 60 * 1000);
   if (currentDay != lastDay) {
-    requestCount = 0; // Reset frequency
+    frequencyCount = 0; // Reset frequency
     lastDay = currentDay;
   }
 
